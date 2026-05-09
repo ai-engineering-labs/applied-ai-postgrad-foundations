@@ -58,6 +58,16 @@ function trainModel(inputXs, outputYs) {
     return model;
 }
 
+async function predict(model, pessoaTensorNormalizada) {
+//transforma o array js para o tensor js 
+    const tfInput = tf.tensor2d(pessoaTensorNormalizada)
+//faz a predicao (output sera um vetor de 3 probabilidades)
+    const pred = model.predict(tfInput)
+    const predArray = await pred.array()
+    console.log(predArray)
+    return predArray[0].map((prob, index)=>({prob, index}))
+}
+
 // Criamos tensores de entrada (xs) e saída (ys) para treinar o modelo
 const inputXs = tf.tensor2d(tensorPessoasNormalizado)
 const outputYs = tf.tensor2d(tensorLabels)
@@ -65,7 +75,7 @@ const outputYs = tf.tensor2d(tensorLabels)
 inputXs.print();
 outputYs.print();
 
-const model = trainModel(inputXs, outputYs);
+const model = await trainModel(inputXs, outputYs); //await para esperar o modelo ser treinado
 
 // Treinamento do modelo
 await model.fit(
@@ -81,5 +91,41 @@ await model.fit(
             }
         }
     })
+
+
+//Teste do modelo
+const pessoa = { nome: "José", idade: 28, cor: "verde", localizacao: "São Paulo" }
+//normalizando a idade usando mesmo padrao do treino
+//exemplo : idade_min=25, idade_max=40, entao(28-25)/(40-25)=0.2
+const idadeNormalizada = (pessoa.idade - 25) / (40 - 25);
+console.log(idadeNormalizada);
+
+const pessoaTensorNormalizada = [
+    [
+        idadeNormalizada, //idade normalizada
+        0, //azul
+        0, //vermelho
+        1, //verde
+        1,//sao paulo
+        0,//rio
+        0,//curitiba
+    ]// Ordem: [idade_normalizada, azul, vermelho, verde, São Paulo, Rio, Curitiba]
+];
+
+const predictions = await predict(model, pessoaTensorNormalizada);
+const results = predictions
+.sort((a,b)=>b.prob-a.prob) // ordena as probabilidades de forma decrescente
+.map(p=>`${labelsNomes[p.index]} (${(p.prob * 100).toFixed(2)})}`)
+.join('\n') // junta as categorias com uma quebra de linha
+
+console.log(results)
+
+
+
+
+
+
+
+
 
 
