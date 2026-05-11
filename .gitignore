@@ -1,0 +1,30 @@
+# Dependências
+node_modules/
+
+# Logs e debug
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Ambiente (chaves, URLs locais)
+.env
+.env.*
+!.env.example
+
+# SO
+.DS_Store
+Thumbs.db
+
+# Testes / cobertura
+coverage/
+.nyc_output/
+
+# Build / caches comuns
+dist/
+build/
+.cache/
+
+# Editor (opcional — remova a linha se quiser versionar config do VS Code)
+.idea/
