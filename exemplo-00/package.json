@@ -1,11 +1,11 @@
 {
-  "name": "exemplo-00",
+  "name": "modulo2-exemplo-00",
   "version": "0.0.1",
-  "description": "",
+  "description": "TensorFlow.js (Node): rede simples com tensores normalizados",
   "main": "index.js",
-  "types": "module",
+  "type": "module",
   "scripts": {
-    "start": "node --no-warnings --watch exemplo-00/index.js",
+    "start": "node --no-warnings --watch index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
