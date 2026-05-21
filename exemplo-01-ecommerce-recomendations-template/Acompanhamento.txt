@@ -1,0 +1,1 @@
+1) Entenda como o projeto funciona, veriquque as camamadas, eventos, etc.
