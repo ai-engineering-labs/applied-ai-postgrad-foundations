@@ -17,6 +17,7 @@
     "author": "",
     "license": "ISC",
     "devDependencies": {
+        "@tensorflow/tfjs": "^4.22.0",
         "browser-sync": "^3.0.4"
     }
 }
