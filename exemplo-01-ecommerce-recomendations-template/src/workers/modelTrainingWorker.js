@@ -70,6 +70,7 @@ function makeContext(catalog, users) {
     //transform to tensors
     return {
         catalog,
+        products: catalog,
         users,
         colorsIndex,
         categoriesIndex,
@@ -91,7 +92,6 @@ const oneHotWeighted = (index, lenght, weight) =>
 
 function encodeProduct(product, context) {
     //Normalizing to a range between 0 and 1 and applying weight to the normalization.
-
     const price = tf.tensor1d([
         normalize(
             product.price,
@@ -113,12 +113,59 @@ function encodeProduct(product, context) {
 
     const color = oneHotWeighted(
         context.colorsIndex[product.color],
-        context.numCategories,
-        WEIGHTS.category
+        context.numColors,
+        WEIGHTS.color
     )
     return tf.concat1d(
         [price, age, category, color]
     )
+}
+
+function encodeUser(user, context) {
+
+    //return the shopping profile
+    if (user.purchases.length) {
+        return tf.stack(
+            user.purchases.map(
+                product => encodeProduct(product, context)
+            )
+        )
+            .mean(0)
+            .reshape([
+                1,
+                context.dimensions
+            ])
+    }
+}
+
+function createTrainingData(context) {
+    //walk through each of the users on the list 
+    const inputs = []
+    const labels = []
+
+    context.users.forEach(user => {
+        const useVector = encodeUser(user, context).dataSync()
+        context.products.forEach(product => {
+            const productVector = encodeProduct(product, context)
+                .dataSync()
+
+            const label = user.purchases.some(
+                purchase => purchase.name === product.name ?
+                    1 : 0
+            )
+            //combine user   + prouct 
+            inputs.push([...useVector, ...productVector])
+            labels.push(label)
+        })
+
+    })
+    return {
+        xs: tf.tensor2d(inputs),
+        ys: tf.tensor2d(labels, [labels.length, 1]),
+        inputDimension: context.dimensions * 2
+        //the lenght is the user vector  + productVector
+    }
+
 }
 
 async function trainModel({ users }) {
@@ -137,9 +184,11 @@ async function trainModel({ users }) {
         }
     })
 
-    debugger
-    _globalCtx = context
 
+    _globalCtx = context
+    debugger
+    const trainData = createTrainingData(context);
+    debugger
     postMessage({
         type: workerEvents.trainingLog,
         epoch: 1,
