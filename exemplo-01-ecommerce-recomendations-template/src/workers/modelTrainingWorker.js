@@ -3,26 +3,25 @@ import { workerEvents } from '../events/constants.js';
 
 console.log('Model training worker initialized');
 let _globalCtx = {};
-let _model = {}
+let _model = null
 
-//the net 
+// Feature importance weights used when encoding products and users.
+// Higher values give more influence to that feature during training.
 const WEIGHTS = {
-    category: 0.4,//most important
+    category: 0.4,
     color: 0.3,
     price: 0.2,
     age: 0.1
 }
 
-// Normalize continuous values (price, age) to 0–1 range
-// Why? Keeps all features balanced so no one dominates training
-// Formula: (val - min) / (max - min)
-// Example: price=129.99, minPrice=39.99, maxPrice=199.99 → 0.56
-
+// Scales a numeric value to the 0–1 range using min-max normalization.
+// Keeps continuous features (price, age) balanced so none dominates training.
+// Formula: (value - min) / (max - min)
 const normalize = (value, min, max) => (value - min) / ((max - min) || 1)
 
-
+// Builds the shared context object used across encoding, training, and inference.
+// Computes normalization bounds, category/color index maps, and per-product average buyer age.
 function makeContext(catalog, users) {
-    //normalize
     const ages = users.map(u => u.age)
     const prices = catalog.map(p => p.price)
 
@@ -35,7 +34,6 @@ function makeContext(catalog, users) {
     const colors = [...new Set(catalog.map(p => p.color))]
     const categories = [...new Set(catalog.map(p => p.category))]
 
-    //map the index
     const colorsIndex = Object.fromEntries(
         colors.map((color, index) => {
             return [color, index]
@@ -46,12 +44,10 @@ function makeContext(catalog, users) {
             return [category, index]
         }))
 
-    //calculate the average of the products purchased, help to personalise
     const midAge = (minAge + maxAge) / 2
     const ageSums = {}
     const ageCounts = {}
 
-    //forEach executes a provided function once for each array element
     users.forEach(user => {
         user.purchases.forEach(
             p => {
@@ -69,7 +65,7 @@ function makeContext(catalog, users) {
             return [product.name, normalize(avg, minAge, maxAge)];
         })
     )
-    //transform to tensors
+
     return {
         catalog,
         products: catalog,
@@ -82,18 +78,20 @@ function makeContext(catalog, users) {
         maxPrice,
         numCategories: categories.length,
         numColors: colors.length,
-        dimensions: 2 + categories.length + colors.length,//price+age+color+categories
+        dimensions: 2 + categories.length + colors.length,
         productAvgAgeNorm,
         categoriesIndex,
         colorsIndex
     }
 }
 
+// Creates a weighted one-hot encoded tensor for categorical features (category, color).
 const oneHotWeighted = (index, lenght, weight) =>
     tf.oneHot(index, lenght).cast('float32').mul(weight)
 
+// Encodes a single product into a fixed-size numeric feature vector.
+// Combines normalized price, average buyer age, weighted category, and weighted color.
 function encodeProduct(product, context) {
-    //Normalizing to a range between 0 and 1 and applying weight to the normalization.
     const price = tf.tensor1d([
         normalize(
             product.price,
@@ -123,9 +121,10 @@ function encodeProduct(product, context) {
     )
 }
 
+// Encodes a user into a single feature vector representing their shopping profile.
+// If the user has purchases, averages the encoded purchased products.
+// Otherwise, falls back to age-only encoding with zeroed product-related features.
 function encodeUser(user, context) {
-
-    //return the shopping profile
     if (user.purchases.length) {
         return tf.stack(
             user.purchases.map(
@@ -138,10 +137,20 @@ function encodeUser(user, context) {
                 context.dimensions
             ])
     }
+    return tf.concat1d([
+        tf.zeros([1]),
+        tf.tensor1d([
+            normalize(user.age, context.minAge, context.maxAge)
+            * WEIGHTS.age
+        ]),
+        tf.zeros([context.numCategories]),
+        tf.zeros([context.numColors]),
+    ]).reshape([1, context.dimensions])
 }
 
+// Generates supervised training examples from all users with purchase history.
+// Each sample pairs a user vector with a product vector; label is 1 if purchased, 0 otherwise.
 function createTrainingData(context) {
-    //walk through each of the users on the list 
     const inputs = []
     const labels = []
 
@@ -157,7 +166,6 @@ function createTrainingData(context) {
                     purchase => purchase.name === product.name ?
                         1 : 0
                 )
-                //combine user   + prouct 
                 inputs.push([...useVector, ...productVector])
                 labels.push(label)
             })
@@ -167,22 +175,15 @@ function createTrainingData(context) {
         xs: tf.tensor2d(inputs),
         ys: tf.tensor2d(labels, [labels.length, 1]),
         inputDimension: context.dimensions * 2
-        //the lenght is the user vector  + productVector
     }
 
 }
 
+// Builds a sequential neural network, compiles it, and trains on the provided data.
+// Architecture: 128 → 64 → 32 ReLU hidden layers, sigmoid output for binary classification.
+// Streams epoch logs back to the main thread during training.
 async function configureNeuralNetAndTrain(trainData) {
-
     const model = tf.sequential()
-    /*Camada de entrada
-     - inputShape: Número de features por exemplo de treino
-    (trainData.inputDim)
-    Exemplo: Se o vetor produto + usuário = 20 números, então
-    inputDim = 20
-    - units: 128 neurônios (muitos "olhos" para detectar padrões)
-    - activation: 'relu' (mantém apenas sinais positivos, ajuda
-    a aprender padrões não-lineares)*/
     model.add(
         tf.layers.dense(
             {
@@ -236,9 +237,12 @@ async function configureNeuralNetAndTrain(trainData) {
             }
         }
     })
+    return model
 
 }
 
+// Full training pipeline: loads catalog, builds context, precomputes product vectors,
+// creates training data, trains the model, and notifies the main thread when complete.
 async function trainModel({ users }) {
     console.log('Training model with users:', users)
 
@@ -266,23 +270,49 @@ async function trainModel({ users }) {
         loss: 1,
         accuracy: 1
     });
+    postMessage({ type: workerEvents.trainingComplete });
 }
 
+// Runs inference for a given user by pairing their vector with every product vector.
+// Builds the input tensor used to score how likely the user is to buy each product.
 function recommend(user, ctx) {
-    console.log('will recommend for user:', user)
-    // postMessage({
-    //     type: workerEvents.recommend,
-    //     user,
-    //     recommendations: []
-    // });
+    if (!_model) return;
+    const context = _globalCtx
+
+    const useVector = encodeUser(user, _globalCtx).dataSync()
+    const inputs = context.productVectors.map(({ vector }) => {
+        return [...useVector, ...vector]
+    })
+
+    const inputTensor = tf.tensor2d(inputs)
+    const predictions = _model.predict(inputTensor)
+
+    const scores = predictions.dataSync()
+    const recommendations = context.productVectors.map((item, index) => {
+        return {
+            ...item.meta,
+            name: item.name,
+            score: scores[index]
+        }
+    })
+    const sortedItems = recommendations
+        .sort((a, b) => b.score - a.score)
+
+
+     postMessage({
+         type: workerEvents.recommend, 
+         user,
+         recommendations: sortedItems});
+
 }
 
-
+// Maps incoming worker messages to their corresponding handler functions.
 const handlers = {
     [workerEvents.trainModel]: trainModel,
     [workerEvents.recommend]: d => recommend(d.user, _globalCtx),
 };
 
+// Entry point: receives messages from the main thread and dispatches by action type.
 self.onmessage = e => {
     const { action, ...data } = e.data;
     if (handlers[action]) handlers[action](data);
